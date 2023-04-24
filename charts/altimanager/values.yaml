@@ -1,0 +1,386 @@
+# Default values for altimanager.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Application Configuration. Will be put in ConfigMaps/Secrets
+config:
+  # -- The Domain, e.g. "epipoc"
+  vaultDomain: "altimanager"
+  # -- A CompanyName which is displayed on the web page.
+  companyName: "Company Inc"
+  # -- Secret Pass Phrase for de/encrypting private keys for application wallets created by builder.
+  buildSecretKey: ""
+  environmentJs: ""
+  vaultDomainConfigJson: ""
+  envJson: ""
+  apihubJson: ""
+  bdnsHosts: ""
+
+
+image:
+  # -- The repository of the container image for the runner
+  # <!-- # pragma: allowlist secret -->
+  repository: "axiologic/altimanager"  # pragma: allowlist secret
+  # -- Image Pull Policy for the runner
+  pullPolicy: Always
+  # -- Overrides the image tag whose default is the chart appVersion.
+  # Default to v1.3.1
+  tag: "0.1.0"  # Note to developers: If you change this version also change appVersion in Chart.yaml
+  # -- sha256 digest of the image.
+  # Do not add the prefix "@sha256:"
+  # Default to v1.3.1
+  # <!-- # pragma: allowlist secret -->
+  sha: "7927c151d4a4025682f8a94d94f313a3e87fc42bdd75514049c46688296a1aa7"  # pragma: allowlist secret
+
+  # -- The number of replicas for the runner
+  replicaCount: 1
+
+  # -- Annotations added to the runner pod
+  podAnnotations: {}
+
+  # -- The strategy of the deployment for the runner. Defaults to type: Recreate as a PVC is bound to it.
+  # See `kubectl explain deployment.spec.strategy` for more and [https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#strategy](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#strategy)
+  deploymentStrategy:
+    type: Recreate
+
+  # -- Liveness probe.
+  # See [https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/)
+  livenessProbe:
+    httpGet:
+      path: /installation-details
+      port: http
+      # It is required to set the Host header to localhost. Reason: With SSO enabled, the default response at / without Header Host=localhost is HTTP 301 which results in warning.
+      httpHeaders:
+        - name: Host
+          value: localhost
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 3
+
+  # -- Readiness probe.
+  # See [https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/)
+  readinessProbe:
+    httpGet:
+      path: /ready-probe
+      port: http
+      # It is required to set the Host header to localhost. Reason: With SSO enabled, the default response at / without Header Host=localhost is HTTP 301 which results in warning.
+      httpHeaders:
+        - name: Host
+          value: localhost
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 3
+
+  # -- Pod Security Context for the runner.
+  # See [https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod)
+  podSecurityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    # -- The SecComp configuration.
+    # Not enabled by default as not every environment supports it.
+    # [https://kubernetes.io/docs/tutorials/security/seccomp/](https://kubernetes.io/docs/tutorials/security/seccomp/)
+    # seccompProfile:
+    #   type: RuntimeDefault
+
+  # -- Security Context for the runner container
+  # See [https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-container](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-container)
+  securityContext:
+    privileged: false
+    capabilities:
+      drop:
+      - ALL
+    # Running as readonly filesystem is currently (May 2022 with altimanager v1.3.1) not possible.
+    # Error:
+    # API-HUB] Preparing to register middleware from path ./components/mqManager
+    # Caught event type [uncaughtException]. Shutting down... uncaughtException Error: ENOENT: no such file or directory, mkdir '/altimanager-workspace/apihub-root/messaging'
+    readOnlyRootFilesystem: false
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    allowPrivilegeEscalation: false
+
+# Builder Settings
+# Settings for Containers with kubectl installed used by Jobs "pre-builder", "pre-upgrade-volumesnapshot", "final-volumesnapshot" and "cleanup"
+kubectl:
+  # -- Time to keep the Job after finished in case of an error. If no error occured the Jobs will immediately by deleted.
+  # If value is not set, then 'ttlSecondsAfterFinished' will not be set.
+  ttlSecondsAfterFinished: 300
+  image:
+    # -- The repository of the container image containing kubectl
+    repository: bitnami/kubectl
+    # -- Image Pull Policy
+    pullPolicy: Always
+    # -- The Tag of the image containing kubectl. Minor Version should match to your Kubernetes Cluster Version.
+    tag: "1.21.14"
+    # -- sha256 digest of the image.
+    # Do not add the prefix "@sha256:"
+    # <br/>
+    # Defaults to image digest for "bitnami/kubectl:1.21.14", see [https://hub.docker.com/layers/kubectl/bitnami/kubectl/1.21.14/images/sha256-f9814e1d2f1be7f7f09addd1d877090fe457d5b66ca2dcf9a311cf1e67168590?context=explore](https://hub.docker.com/layers/kubectl/bitnami/kubectl/1.21.14/images/sha256-f9814e1d2f1be7f7f09addd1d877090fe457d5b66ca2dcf9a311cf1e67168590?context=explore)
+    # <!-- # pragma: allowlist secret -->
+    sha: "bba32da4e7d08ce099e40c573a2a5e4bdd8b34377a1453a69bbb6977a04e8825"  # pragma: allowlist secret
+
+  # -- Resource constraints for the pre-builder and cleanup job
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+  # -- Pod Security Context for the pod running kubectl.
+  # See [https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod)
+  podSecurityContext:
+    runAsUser: 65534
+    runAsGroup: 65534
+    fsGroup: 65534
+    # -- The SecComp configuration.
+    # Not enabled by default as not every environment supports it.
+    # [https://kubernetes.io/docs/tutorials/security/seccomp/](https://kubernetes.io/docs/tutorials/security/seccomp/)
+    # seccompProfile:
+    #   type: RuntimeDefault
+
+  # -- Security Context for the container running kubectl
+  # See [https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-container](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-container)
+  securityContext:
+    privileged: false
+    capabilities:
+      drop:
+      - ALL
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+
+# Service Account for Builder and Runner
+serviceAccount:
+  # -- Specifies whether a service account should be created which is used by builder and runner.
+  create: false
+  # -- Annotations to add to the service account
+  annotations: {}
+  # -- The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+  # -- Whether automounting API credentials for a service account is enabled or not.
+  # See [https://docs.bridgecrew.io/docs/bc_k8s_35](https://docs.bridgecrew.io/docs/bc_k8s_35)
+  automountServiceAccountToken: false
+
+# -- Resource constraints for the builder and runner
+resources: {}
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+# Persistence settings by using Persistent Volume Claims for the external volume of builder and runner.
+# See [http://kubernetes.io/docs/user-guide/persistent-volumes/](http://kubernetes.io/docs/user-guide/persistent-volumes/)
+persistence:
+  # -- The name of an existing PVC to use instead of creating a new one.
+  existingClaim: ""
+  # -- Name of the storage class for the new PVC.
+  # If empty or not set then storage class will not be set - which means that the default storage class will be used.
+  storageClassName: ""
+  # -- Size of the volume for the new PVC
+  size: "100Gi"
+  # -- Boolean flag whether to delete the (new) PVC on uninstall or not.
+  deleteOnUninstall: true
+  # -- Finalizers for the new PVC.
+  # See [https://kubernetes.io/docs/concepts/storage/persistent-volumes/#storage-object-in-use-protection](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#storage-object-in-use-protection)
+  finalizers:
+    - kubernetes.io/pvc-protection
+  # -- AccessModes for the new PVC.
+  # See [https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes)
+  accessModes:
+    - ReadWriteOnce
+  # -- Selector Labels for the new PVC.
+  # See [https://kubernetes.io/docs/concepts/storage/persistent-volumes/#selector](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#selector)
+  selectorLabels: {}
+  # -- DataSource option for cloning an existing volume or creating from a snapshot for a new PVC.
+  # See [values.yaml](values.yaml) for more details.
+  dataSource: {}
+    # # For cloning from an existing volume
+    # # See [https://kubernetes.io/docs/concepts/storage/volume-pvc-datasource/](https://kubernetes.io/docs/concepts/storage/volume-pvc-datasource/)
+    # kind: PersistentVolumeClaim
+    # name: pvc-1
+
+    # # For creating from a snapshot (here AWS)
+    # # [https://aws.amazon.com/blogs/containers/migrating-amazon-eks-clusters-from-gp2-to-gp3-ebs-volumes/](https://aws.amazon.com/blogs/containers/migrating-amazon-eks-clusters-from-gp2-to-gp3-ebs-volumes/)
+    # name: imported-aws-snapshot
+    # kind: VolumeSnapshot
+    # apiGroup: snapshot.storage.k8s.io
+
+# Service settings for the runner
+service:
+  # -- Either ClusterIP, NodePort or LoadBalancer for the runner
+  # See [https://kubernetes.io/docs/concepts/services-networking/service/](https://kubernetes.io/docs/concepts/services-networking/service/)
+  type: ClusterIP
+  # -- Port where the service will be exposed
+  port: 80
+  # -- Annotations for the service.
+  # See AWS, see [https://kubernetes.io/docs/concepts/services-networking/service/#ssl-support-on-aws](https://kubernetes.io/docs/concepts/services-networking/service/#ssl-support-on-aws)
+  # For Azure, see [https://kubernetes-sigs.github.io/cloud-provider-azure/topics/loadbalancer/#loadbalancer-annotations](https://kubernetes-sigs.github.io/cloud-provider-azure/topics/loadbalancer/#loadbalancer-annotations)
+  annotations: {}
+  # -- A list of CIDR ranges to whitelist for ingress traffic to the service if type is LoadBalancer.
+  # If list is empty, Kubernetes allows traffic from 0.0.0.0/0
+  loadBalancerSourceRanges:
+    # - 8.8.8.8/32
+    # - 8.8.4.4/32
+  # -- A static IP address for the LoadBalancer if type is LoadBalancer.
+  # Note: This only applies to certain Cloud providers like Google or [Azure](https://docs.microsoft.com/en-us/azure/aks/static-ip).
+  # [https://kubernetes.io/docs/concepts/services-networking/service/#type-loadbalancer](https://kubernetes.io/docs/concepts/services-networking/service/#type-loadbalancer).
+  loadBalancerIP: ""
+
+# Settings for using SecretProviderClass (CSI Secrets driver) instead of Secret.
+secretProviderClass:
+  # -- Whether to use CSI Secrets Store (e.g. Azure Key Vault) instead of "traditional" Kubernetes Secret.
+  # NOTE: DO ENABLE, NOT TESTED YET!
+  enabled: false
+  # -- API Version of the SecretProviderClass
+  apiVersion: "secrets-store.csi.x-k8s.io/v1"
+  # -- Spec for the SecretProviderClass.
+  # Note: The orgAccountJson must be mounted as objectAlias orgAccountJson
+  spec: {}
+    ## Sample for AWS:
+    # provider: aws
+    # parameters:
+    #   objects: |
+    #     - objectName: "TODO: ARN or Name of Secret"
+    #       objectType: "secretsmanager"
+    #       jmesPath:
+    #         - path: envJson
+    #           objectAlias: env.json
+    #         - path: apihubJson
+    #           objectAlias: apihub.json
+
+# Ingress settings for the runner
+ingress:
+  # -- Whether to create ingress or not for the runner.
+  # <br/>
+  # Note: For ingress an Ingress Controller (e.g. AWS LB Controller, NGINX Ingress Controller, Traefik, ...) is required and service.type should be ClusterIP or NodePort depending on your configuration
+  enabled: false
+  # -- The className specifies the IngressClass object which is responsible for that class.
+  # See [https://kubernetes.io/docs/concepts/services-networking/ingress/#ingress-class](https://kubernetes.io/docs/concepts/services-networking/ingress/#ingress-class)
+  # <br/>
+  # For Kubernetes >= 1.18 it is required to have an existing IngressClass object.
+  # If IngressClass object does not exists, omit className and add the deprecated annotation 'kubernetes.io/ingress.class' instead.
+  # <br/>
+  # For Kubernetes < 1.18 either use className or annotation 'kubernetes.io/ingress.class'.
+  className: ""
+  # -- Ingress annotations.
+  # <br/>
+  # For AWS LB Controller, see [https://kubernetes-sigs.github.io/aws-load-balancer-controller/v2.3/guide/ingress/annotations/](https://kubernetes-sigs.github.io/aws-load-balancer-controller/v2.3/guide/ingress/annotations/)
+  # <br/>
+  # For Azure Application Gateway Ingress Controller, see [https://azure.github.io/application-gateway-kubernetes-ingress/annotations/](https://azure.github.io/application-gateway-kubernetes-ingress/annotations/)
+  # <br/>
+  # For NGINX Ingress Controller, see [https://kubernetes.github.io/ingress-nginx/user-guide/nginx-configuration/annotations/](https://kubernetes.github.io/ingress-nginx/user-guide/nginx-configuration/annotations/)
+  # <br/>
+  # For Traefik Ingress Controller, see [https://doc.traefik.io/traefik/routing/providers/kubernetes-ingress/#annotations](https://doc.traefik.io/traefik/routing/providers/kubernetes-ingress/#annotations)
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+  # -- A list of hostnames and path(s) to listen at the Ingress Controller
+  hosts:
+    -
+      # -- The FQDN/hostname
+      host: altimanager.some-pharma-company.com
+      paths:
+        -
+          # -- The Ingress Path. See [https://kubernetes.io/docs/concepts/services-networking/ingress/#examples](https://kubernetes.io/docs/concepts/services-networking/ingress/#examples)
+          # <br/>
+          # Note: For Ingress Controllers like AWS LB Controller see their specific documentation.
+          path: /
+          # -- The type of path. This value is required since Kubernetes 1.18.
+          # <br/>
+          # For Ingress Controllers like AWS LB Controller or Traefik it is usually required to set its value to ImplementationSpecific
+          # See [https://kubernetes.io/docs/concepts/services-networking/ingress/#path-types](https://kubernetes.io/docs/concepts/services-networking/ingress/#path-types)
+          # and [https://kubernetes.io/blog/2020/04/02/improvements-to-the-ingress-api-in-kubernetes-1.18/](https://kubernetes.io/blog/2020/04/02/improvements-to-the-ingress-api-in-kubernetes-1.18/)
+          pathType: ImplementationSpecific
+  tls: []
+  #  - secretName: chart-example-tls
+  #    hosts:
+  #      - chart-example.local
+
+#
+# Overall settings
+#
+
+# -- Secret(s) for pulling an container image from a private registry.
+# Used for all images.
+# See [https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/](https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/)
+imagePullSecrets: []
+# -- nameOverride replaces the name of the chart in the Chart.yaml file, when this is used to construct Kubernetes object names.
+# From [https://stackoverflow.com/questions/63838705/what-is-the-difference-between-fullnameoverride-and-nameoverride-in-helm](https://stackoverflow.com/questions/63838705/what-is-the-difference-between-fullnameoverride-and-nameoverride-in-helm)
+nameOverride: ""
+# -- fullnameOverride completely replaces the generated name.
+# From [https://stackoverflow.com/questions/63838705/what-is-the-difference-between-fullnameoverride-and-nameoverride-in-helm](https://stackoverflow.com/questions/63838705/what-is-the-difference-between-fullnameoverride-and-nameoverride-in-helm)
+fullnameOverride: ""
+# -- Override the deployment namespace.
+# Very useful for multi-namespace deployments in combined charts
+namespaceOverride: ""
+
+# -- Node Selectors in order to assign pods to certain nodes.
+# See [https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/)
+nodeSelector: {}
+
+# -- Tolerations for scheduling a pod.
+# See [https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/)
+tolerations: []
+
+# -- Affinity for scheduling a pod.
+# See [https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/)
+affinity: {}
+
+# Config Settings for creating Kubernetes VolumeSnapshots on upgrades.
+volumeSnapshots:
+  # -- Whether to create snapshots before helm upgrading or not.
+  # The name of the VolumeSnapshot will be "<helm release name>-upgrade-to-revision-<helm revision>-<UTC timestamp YYYYMMDDHHMM>", e.g. "altimanager-upgrade-to-revision-19-202206221211"
+  preUpgradeEnabled: false
+  # -- Whether to create final snapshot before delete.
+  # The name of the VolumeSnapshot will be "<helm release name>-final-<UTC timestamp YYYYMMDDHHMM>", e.g. "altimanager-final-202206221213"
+  finalSnapshotEnabled: false
+  # -- API Version of the "snapshot.storage.k8s.io" resource.
+  # See [https://kubernetes.io/docs/concepts/storage/volume-snapshots/](https://kubernetes.io/docs/concepts/storage/volume-snapshots/)
+  apiVersion: "v1"
+  # -- The Volume Snapshot class name to use for the pre-upgrade and the final snapshot.
+  # It is stongly recommended to use a class with 'deletionPolicy: Retain' for the pre-upgrade and final snapshots.
+  # Otherwise you will loose the snapshot on your storage system if the Kubernetes VolumeSnapshot will be deleted (e.g. if the namespace will be deleted).
+  # See [https://kubernetes.io/docs/concepts/storage/volume-snapshot-classes/](https://kubernetes.io/docs/concepts/storage/volume-snapshot-classes/)
+  className: ""
+  # -- Whether to wait until the VolumeSnapshot is ready to use.
+  # Note: On first snapshot this may take a while.
+  waitForReadyToUse: true
+
+# -- An array of extra resources that will be deployed.
+# This is useful e.g. for custom resources like SnapshotSchedule provided by [https://github.com/backube/snapscheduler](https://github.com/backube/snapscheduler).
+extraResources:
+# - |
+#   apiVersion: snapscheduler.backube/v1
+#   kind: SnapshotSchedule
+#   metadata:
+#     name: daily
+#   spec:
+#     retention:
+#       maxCount: 30
+#     schedule: 30 0 * * *
+#
+# - |
+#   apiVersion: snapscheduler.backube/v1
+#   kind: SnapshotSchedule
+#   metadata:
+#     name: hourly
+#   spec:
+#     retention:
+#       maxCount: 24
+#     schedule: 15 * * * *

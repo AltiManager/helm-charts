@@ -1,0 +1,343 @@
+{{ template "chart.header" . }}
+
+{{ template "chart.versionBadge" . }}{{ template "chart.typeBadge" . }}{{ template "chart.appVersionBadge" . }}
+
+{{ template "chart.description" . }}
+
+## Requirements
+
+- [helm 3](https://helm.sh/docs/intro/install/)
+- These mandatory configuration values:
+  - Vault Domain - The Vault Domain - e.g. `vault.my-company`
+  - bdnsHosts - The Centrally managed and provided BDNS Hosts Config
+  - buildSecretKey - A secret pass phrase for de/encrpytion of the initially generated private keys of the wallets.
+
+## Usage
+
+- [Here](./README.md#values) is a full list of all configuration values.
+- The [values.yaml file](./values.yaml) shows the raw view of all configuration values.
+
+This helm chart uses Helm [hooks](https://helm.sh/docs/topics/charts_hooks/) in order to install, upgrade and manage the application and its resources.
+
+```mermaid
+sequenceDiagram
+  participant PIN as pre-install
+  participant PUP as pre-upgrade
+  participant I as install
+  participant U as uninstall
+  participant PUN as post-uninstall
+  note right of PUN: Note on resources marked with *:<br/>They are created on a helm hook<br/>and will not be deleted after execution<br/>but will be removed by Cleanup Job
+  Note over PIN,PUN: PersistentVolumeClaim for Builder and Runner (B and R)*
+  Note over PIN,PUN: ServiceAccount for B and R*
+  note right of PUP: Note on upgrades:<br/>Pre-Builder and Builder jobs run<br/>1. if 'builder.forceRun: true'<br/>2. if builder image has changed
+  Note over PUP:Pre-Builder Job*
+  Note over PUP:Pre-Builder ServiceAccount
+  Note over PUP:Pre-Builder Role
+  Note over PUP:Pre-Builder RoleBinding
+  Note over PIN,PUP:Builder Job*
+  Note over PIN,PUP:Builder ConfigMaps Builder
+  Note over PIN,PUP:Builder Secret (or SecretProviderClass)
+  Note over I,U:Runner Deployment
+  Note over I,U:Runner ConfigMaps
+  Note over I,U:Runner Service
+  Note over I,U:Runner Ingress
+  Note over I,U:Runner Secret (or SecretProviderClass)
+  Note over I,U:Build-Info ConfigMap
+  note right of PUN: Note: Cleanup job deletes <br/>1. Pre-Builder Job<br/>2. Builder Job<br/>3. ServiceAccount for B and R<br/>4. PersistentVolumeClaim for B and R (optional)
+  Note over PUN:Cleanup Job
+  Note over PUN:Cleanup ServiceAccount
+  Note over PUN:Cleanup Role
+  Note over PUN:Cleanup RoleBinding
+```
+
+## PersistentVolumeClaim
+
+A Persistent Volume is mounted to the Builder and Runner Pod. 
+Therefore a PersistentVolumeClaim (PVC) is deployed by the helm chart at hook `pre-install` with various configuration options (see [values.yaml](values.yaml) at section `persistence`). 
+The PVC is being deleted by *Cleanup Job* on deletion of the helm chart if `persistence.deleteOnUninstall: true` (default).
+
+If you want to reuse an existing PVC instead of creating a new one, set `persistent.existingClaim`.
+
+## ServiceAccount
+
+A dedicated ServiceAccount is required by the Builder Job and the Runner Pod(s) if you need to inject Secrets via *CSI Secrets Driver* instead of using Kubernetes Secrets. Further information can be found later in this document.
+It is being deployed by the helm chart at hook `pre-install` and is being deleted by *Cleanup Job* on deletion of the helm chart.
+In order to create the ServiceAccount, set `serviceAccount.create: true` (default is `false`).
+## Installation
+
+### Quick install with internal service of type ClusterIP
+
+By default, this helm chart installs the Ethereum Adapter Service at an internal ClusterIP Service listening at port 3000.
+This is to prevent exposing the service to the internet by accident!
+
+It is recommended to put non-sensitive configuration values in an configuration file and pass sensitive/secret values via commandline.
+
+1. Create configuration file, e.g. *my-config.yaml*
+
+    ```yaml
+    config:
+      vaultDomain: "vault.companyname"
+      ethadapterUrl: "http://ethadapter.altimanager-poc-ethadapter:3000"
+      buildSecretKey: "SuperStrongPassword"  # pragma: allowlist secret
+      bdnsHosts: |-
+          # ... content of the BDNS Hosts file ...
+
+    ```
+
+2. Install via helm to namespace `default`
+
+    ```bash
+    helm upgrade my-release-name pharmaledgerassoc/altimanager --version={{ template "chart.version" . }} \
+        --install \
+        --values my-config.yaml \
+    ```
+
+### Expose Service via Load Balancer
+
+In order to expose the service **directly** by an **own dedicated** Load Balancer, just **add** `service.type` with value `LoadBalancer` to your config file (in order to override the default value which is `ClusterIP`).
+
+**Please note:** At AWS using `service.type` = `LoadBalancer` is not recommended any more, as it creates a Classic Load Balancer. Use [AWS Load Balancer Controller](https://kubernetes-sigs.github.io/aws-load-balancer-controller/v2.3/) with an ingress instead. A full sample is provided later in the docs. Using an Application Load Balancer (managed by AWS LB Controller) increases security (e.g. by using a Web Application Firewall for your http based traffic) and provides more features like hostname, pathname routing or built-in authentication mechanism via OIDC or AWS Cognito.
+
+Configuration file *my-config.yaml*
+
+```yaml
+service:
+  type: LoadBalancer
+
+config:
+  # ... config section keys and values ...
+```
+
+There are more configuration options available like customizing the port and configuring the Load Balancer via annotations (e.g. for configuring SSL Listener).
+
+**Also note:** Annotations are very specific to your environment/cloud provider, see [Kubernetes Service Reference](https://kubernetes.io/docs/concepts/services-networking/service/#ssl-support-on-aws) for more information. For Azure, take a look [here](https://kubernetes-sigs.github.io/cloud-provider-azure/topics/loadbalancer/#loadbalancer-annotations).
+
+Sample for AWS (SSL and listening on port 1234 instead 80 which is the default):
+
+```yaml
+service:
+  type: LoadBalancer
+  port: 80
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-ssl-cert: arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: http
+    service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "80"
+    # https://docs.aws.amazon.com/de_de/elasticloadbalancing/latest/classic/elb-security-policy-table.html
+    service.beta.kubernetes.io/aws-load-balancer-ssl-negotiation-policy: "ELBSecurityPolicy-TLS-1-2-2017-01"
+
+# further config
+```
+
+### AWS Load Balancer Controller: Expose Service via Ingress
+
+Note: You need the [AWS Load Balancer Controller](https://kubernetes-sigs.github.io/aws-load-balancer-controller/) installed and configured properly.
+
+1. Enable ingress
+2. Add *host*, *path* *`/*`* and *pathType* `ImplementationSpecific`
+3. Add annotations for AWS LB Controller
+4. A SSL certificate at AWS Certificate Manager (either for the hostname, here `altimanager.mydomain.com` or wildcard `*.mydomain.com`)
+
+Configuration file *my-config.yaml*
+
+```yaml
+ingress:
+  enabled: true
+  # Let AWS LB Controller handle the ingress (default className is alb)
+  # Note: Use className instead of annotation 'kubernetes.io/ingress.class' which is deprecated since 1.18
+  # For Kubernetes >= 1.18 it is required to have an existing IngressClass object.
+  # See: https://kubernetes.io/docs/concepts/services-networking/ingress/#deprecated-annotation
+  className: alb
+  hosts:
+    - host: altimanager.mydomain.com
+      # Path must be /* for ALB to match all paths
+      paths:
+        - path: /*
+          pathType: ImplementationSpecific
+  # For full list of annotations for AWS LB Controller, see https://kubernetes-sigs.github.io/aws-load-balancer-controller/v2.3/guide/ingress/annotations/
+  annotations:
+    # The ARN of the existing SSL Certificate at AWS Certificate Manager
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:REGION:ACCOUNT_ID:certificate/CERTIFICATE_ID
+    # The name of the ALB group, can be used to configure a single ALB by multiple ingress objects
+    alb.ingress.kubernetes.io/group.name: default
+    # Specifies the HTTP path when performing health check on targets.
+    alb.ingress.kubernetes.io/healthcheck-path: /
+    # Specifies the port used when performing health check on targets. 
+    alb.ingress.kubernetes.io/healthcheck-port: traffic-port
+    # Specifies the HTTP status code that should be expected when doing health checks against the specified health check path.
+    alb.ingress.kubernetes.io/success-codes: "200"
+    # Listen on HTTPS protocol at port 443 at the ALB
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    # Use internet facing
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    # Use most current (as of Dec 2021) encryption ciphers
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS-1-2-Ext-2018-06
+    # Use target type IP which is the case if the service type is ClusterIP
+    alb.ingress.kubernetes.io/target-type: ip
+
+config:
+  # ... config section keys and values ...
+```
+
+## CSI Secrets Driver
+
+This enables storing the following secret values in one of the supported Secret stores (e.g. Azure Key Vault or AWS Secrets Manager) instead of using Kubernetes Secrets:
+
+- `apihub.json` - If using SSO, *apihub.json* contains SSO configuration like Client ID and Secret
+- `env.json` - Contains the secret passphrase for de/encrypting the generated private keys for the wallets.
+
+More information can be found here:
+
+- [https://secrets-store-csi-driver.sigs.k8s.io/](https://secrets-store-csi-driver.sigs.k8s.io/)
+- [https://aws.amazon.com/blogs/security/how-to-use-aws-secrets-configuration-provider-with-kubernetes-secrets-store-csi-driver/](https://aws.amazon.com/blogs/security/how-to-use-aws-secrets-configuration-provider-with-kubernetes-secrets-store-csi-driver/)
+
+Sample for AWS:
+
+1. Prepare `env.json` and `apihub.json` files. See [here](https://github.com/pharmaledgerassoc/altimanager-workspace/blob/v1.3.1/apihub-root/external-volume/config/apihub.json) and [here](https://github.com/pharmaledgerassoc/altimanager-workspace/blob/v1.3.1/env.json) for templates.
+2. Create a new Secret in Secrets Manager with two keys `envJson` and `apihubJson`. Note: If you want to create the secret as PlainText, then you must encode the values to JSON String each!
+
+    Sample:
+
+    ```json
+    {
+        "envJson": "{  \"PSK_TMP_WORKING_DIR\": \"tmp\", <AND MORE IN JSON STRING FORMAT> }",
+        "apihubJson": "{  \"storage\": \"../apihub-root\",  <AND MORE IN JSON STRING FORMAT> }"
+    }
+    ```
+
+3. Create IAM role with trust relationship to the Kubernetes Service Account and a policy that allows getting the secret value.
+
+    Trust relationship sample:
+
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+          {
+              "Sid": "AssumeableByOIDC",
+              "Effect": "Allow",
+              "Principal": {
+                  "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/oidc.eks.<REGION>.amazonaws.com/id/<OIDC_PROVIDER_ID>"
+              },
+              "Action": "sts:AssumeRoleWithWebIdentity",
+              "Condition": {
+                  "StringLike": {
+                      "oidc.eks.<REGION>.amazonaws.com/id/<OIDC_PROVIDER_ID>:sub": "system:serviceaccount:<K8S_NAMESPACE>:<NAME>"
+                  }
+              }
+          }
+      ]
+    }
+    ```
+
+    Policy:
+
+    ```json
+    {
+        "Statement": [
+            {
+                "Action": [
+                    "secretsmanager:GetSecretValue",
+                    "secretsmanager:DescribeSecret"
+                ],
+                "Effect": "Allow",
+                "Resource": [
+                    "<SECRET_ARN>"
+                ]
+            }
+        ],
+        "Version": "2012-10-17"
+    }
+    ```
+
+4. Modify config to use ServiceAccount and SecretProviderClass
+
+    ```yaml
+    serviceAccount:
+      create: true
+      annotations:
+        eks.amazonaws.com/role-arn: "<ARN of the IAM role>"
+
+    secretProviderClass:
+      enabled: true
+      spec:
+        provider: aws
+        parameters:
+          objects: |
+            - objectName: "<ARN or Name of Secret>"
+              objectType: "secretsmanager"
+              jmesPath: 
+                - path: envJson
+                  objectAlias: env.json
+                - path: apihubJson
+                  objectAlias: apihub.json
+    ```
+
+## Backup: Create VolumeSnapshot before upgrading and before deletion of helm release
+
+Note: Ensure Volume Snapshotting has been set up appropriately.
+
+```yaml
+volumeSnapshots:
+  preUpgradeEnabled: true
+  finalSnapshotEnabled: true
+  # It is stongly recommended to use a class with 'deletionPolicy: Retain' for the pre-upgrade and final snapshots.
+  # Otherwise you will loose the snapshot on your storage system if the Kubernetes VolumeSnapshot will be deleted (e.g. if the namespace will be deleted).
+  className: "<Name of the VolumeSnapshotClass>"
+
+```
+
+## Additional helm options
+
+Run `helm upgrade --helm` for full list of options.
+
+1. Install to other namespace
+
+    You can install into other namespace than `default` by setting the `--namespace` parameter, e.g.
+
+    ```bash
+    helm upgrade my-release-name pharmaledgerassoc/altimanager --version={{ template "chart.version" . }} \
+        --install \
+        --namespace=my-namespace \
+        --values my-config.yaml \
+    ```
+
+2. Wait until installation has finished successfully and the deployment is up and running.
+
+    Provide the `--wait` argument and time to wait (default is 5 minutes) via `--timeout`
+
+    ```bash
+    helm upgrade my-release-name pharmaledgerassoc/altimanager --version={{ template "chart.version" . }} \
+        --install \
+        --wait --timeout=600s \
+        --values my-config.yaml \
+    ```
+
+## Potential issues
+
+1. `Error: admission webhook "vingress.elbv2.k8s.aws" denied the request: invalid ingress class: IngressClass.networking.k8s.io "alb" not found`
+
+    **Description:** This error only applies to Kubernetes >= 1.18 and indicates that no matching *IngressClass* object was found.
+
+    **Solution:** Either declare an appropriate IngressClass or omit *className* and add annotation `kubernetes.io/ingress.class`
+
+    Further information:
+
+     - [Kubernetes IngressClass](https://kubernetes.io/docs/concepts/services-networking/ingress/#ingress-class)
+     - [AWS Load Balancer controller documentation](https://kubernetes-sigs.github.io/aws-load-balancer-controller/v2.3/guide/ingress/ingress_class/)
+
+## Helm Unittesting
+
+[helm-unittest](https://github.com/quintush/helm-unittest) is being used for testing the output of the helm chart.
+Tests can be found in [tests](./tests)
+
+{{ template "chart.maintainersSection" . }}
+
+{{ template "chart.requirementsSection" . }}
+
+{{ template "chart.valuesHeader" . }}
+
+*Note:* Please scroll horizontally to show more columns (e.g. description)!
+
+{{ template "chart.valuesTable" . }}
+
+{{ template "helm-docs.versionFooter" . }}

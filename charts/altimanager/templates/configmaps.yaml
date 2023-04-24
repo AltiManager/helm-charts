@@ -1,0 +1,10 @@
+{{- /*
+Create Configmaps from templates
+*/}}
+
+{{- include "altimanager.configmap-bdns" (list $ . "" (dict)) }}
+---
+{{- include "altimanager.configmap-domains" (list $ . "" (dict)) }}
+---
+{{- include "altimanager.configmap-environment" (list $ . "" (dict)) }}
+
