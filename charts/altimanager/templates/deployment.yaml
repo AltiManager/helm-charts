@@ -45,7 +45,7 @@ spec:
         securityContext:
           {{- toYaml . | nindent 10 }}
         {{- end }}
-        image: {{ include "altimanager.runner.image" . | quote }}
+        image: {{ include "altimanager.image" . | quote }}
         imagePullPolicy: {{ .Values.image.pullPolicy | default "Always" }}
         ports:
           - name: http
